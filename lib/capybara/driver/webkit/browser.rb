@@ -1,4 +1,5 @@
 require 'socket'
+require 'thread'
 require 'capybara/util/timeout'
 require 'json'
 
@@ -8,6 +9,9 @@ class Capybara::Driver::Webkit
 
     def initialize(options = {})
       @socket_class = options[:socket_class] || TCPSocket
+      @stdout       = options.has_key?(:stdout) ?
+                        options[:stdout] :
+                        $stdout
       start_server
       connect
     end
@@ -28,8 +32,20 @@ class Capybara::Driver::Webkit
       command("Reset")
     end
 
+    def body
+      command("Body")
+    end
+
     def source
       command("Source")
+    end
+
+    def status_code
+      command("Status").to_i
+    end
+
+    def response_headers
+      Hash[command("Headers").split("\n").map { |header| header.split(": ") }]
     end
 
     def url
@@ -73,28 +89,57 @@ class Capybara::Driver::Webkit
     private
 
     def start_server
-      read_pipe, write_pipe = fork_server
-      @server_port = discover_server_port(read_pipe)
+      pipe = fork_server
+      @server_port = discover_server_port(pipe)
+      @stdout_thread = Thread.new do
+        Thread.current.abort_on_exception = true
+        forward_stdout(pipe)
+      end
     end
 
     def fork_server
       server_path = File.expand_path("../../../../../bin/webkit_server", __FILE__)
 
-      read_pipe, write_pipe = IO.pipe
-      @pid = fork do
-        $stdout.reopen write_pipe
-        read_pipe.close
-        exec(server_path)
-      end
+      pipe, @pid = server_pipe_and_pid(server_path)
+
       at_exit { Process.kill("INT", @pid) }
 
-      write_pipe.close
-      [read_pipe, write_pipe]
+      pipe
+    end
+
+    def server_pipe_and_pid(server_path)
+      pipe = IO.popen(server_path)
+      [pipe, pipe.pid]
     end
 
     def discover_server_port(read_pipe)
       return unless IO.select([read_pipe], nil, nil, 10)
       ((read_pipe.first || '').match(/listening on port: (\d+)/) || [])[1].to_i
+    end
+
+    def forward_stdout(pipe)
+      while pipe_readable?(pipe)
+        line = pipe.readline
+        if @stdout
+          @stdout.write(line)
+          @stdout.flush
+        end
+      end
+    rescue EOFError
+    end
+
+    if !defined?(RUBY_ENGINE) || (RUBY_ENGINE == "ruby" && RUBY_VERSION <= "1.8")
+      # please note the use of IO::select() here, as it is used specifically to
+      # preserve correct signal handling behavior in ruby 1.8.
+      # https://github.com/thibaudgg/rb-fsevent/commit/d1a868bf8dc72dbca102bedbadff76c7e6c2dc21
+      # https://github.com/thibaudgg/rb-fsevent/blob/1ca42b987596f350ee7b19d8f8210b7b6ae8766b/ext/fsevent/fsevent_watch.c#L171
+      def pipe_readable?(pipe)
+        IO.select([pipe])
+      end
+    else
+      def pipe_readable?(pipe)
+        !pipe.eof?
+      end
     end
 
     def connect

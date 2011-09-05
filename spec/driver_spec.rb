@@ -119,6 +119,7 @@ describe Capybara::Driver::Webkit do
                 <div id="invisible">Can't see me</div>
               </div>
               <input type="text" disabled="disabled"/>
+              <input id="checktest" type="checkbox" checked="checked"/>
               <script type="text/javascript">
                 document.write("<p id='greeting'>he" + "llo</p>");
               </script>
@@ -174,10 +175,6 @@ describe Capybara::Driver::Webkit do
 
     it "returns the source code for the page" do
       subject.source.should =~ %r{<html>.*greeting.*}m
-    end
-
-    it "aliases body as source" do
-      subject.body.should == subject.source
     end
 
     it "evaluates Javascript and returns a string" do
@@ -253,6 +250,10 @@ describe Capybara::Driver::Webkit do
       subject.find("//input").first.should be_disabled
     end
 
+    it "reads checked property" do
+      subject.find("//input[@id='checktest']").first.should be_checked
+    end
+
     it "finds visible elements" do
       subject.find("//p").first.should be_visible
       subject.find("//*[@id='invisible']").first.should_not be_visible
@@ -266,6 +267,7 @@ describe Capybara::Driver::Webkit do
           <html><body>
             <form action="/" method="GET">
               <input type="text" name="foo" value="bar"/>
+              <input type="text" name="maxlength_foo" value="bar" maxlength="10"/>
               <input type="text" id="disabled_input" disabled="disabled"/>
               <input type="checkbox" name="checkedbox" value="1" checked="checked"/>
               <input type="checkbox" name="uncheckedbox" value="2"/>
@@ -309,6 +311,24 @@ describe Capybara::Driver::Webkit do
       input = subject.find("//input").first
       input.set("newvalue")
       input.value.should == "newvalue"
+    end
+
+    it "sets an input's value greater than the max length" do
+      input = subject.find("//input[@name='maxlength_foo']").first
+      input.set("allegories (poems)")
+      input.value.should == "allegories"
+    end
+
+    it "sets an input's value equal to the max length" do
+      input = subject.find("//input[@name='maxlength_foo']").first
+      input.set("allegories")
+      input.value.should == "allegories"
+    end
+
+    it "sets an input's value less than the max length" do
+      input = subject.find("//input[@name='maxlength_foo']").first
+      input.set("poems")
+      input.value.should == "poems"
     end
 
     it "sets an input's nil value" do
@@ -371,28 +391,36 @@ describe Capybara::Driver::Webkit do
       checked_box['checked'].should be_true
     end
 
+    it "knows a checked box is checked using checked?" do
+      checked_box.should be_checked
+    end
+
     it "knows an unchecked box is unchecked" do
       unchecked_box['checked'].should_not be_true
     end
 
+    it "knows an unchecked box is unchecked using checked?" do
+      unchecked_box.should_not be_checked
+    end
+
     it "checks an unchecked box" do
       unchecked_box.set(true)
-      unchecked_box['checked'].should be_true
+      unchecked_box.should be_checked
     end
 
     it "unchecks a checked box" do
       checked_box.set(false)
-      checked_box['checked'].should_not be_true
+      checked_box.should_not be_checked
     end
 
     it "leaves a checked box checked" do
       checked_box.set(true)
-      checked_box['checked'].should be_true
+      checked_box.should be_checked
     end
 
     it "leaves an unchecked box unchecked" do
       unchecked_box.set(false)
-      unchecked_box['checked'].should_not be_true
+      unchecked_box.should_not be_checked
     end
 
     let(:enabled_input)  { subject.find("//input[@name='foo']").first }
@@ -780,6 +808,73 @@ describe Capybara::Driver::Webkit do
       subject.browser.instance_variable_get(:@socket).stub!(:gets).and_return(nil)
       subject.browser.instance_variable_get(:@socket).stub!(:puts)
       subject.browser.instance_variable_get(:@socket).stub!(:print)
+    end
+  end
+
+  context "custom font app" do
+    before(:all) do
+      @app = lambda do |env|
+        body = <<-HTML
+          <html>
+            <head>
+              <style type="text/css">
+                p { font-family: "Verdana"; }
+              </style>
+            </head>
+            <body>
+              <p id="text">Hello</p>
+            </body>
+          </html>
+        HTML
+        [200,
+          { 'Content-Type' => 'text/html', 'Content-Length' => body.length.to_s },
+          [body]]
+      end
+    end
+
+    it "ignores custom fonts" do
+      font_family = subject.evaluate_script(<<-SCRIPT)
+        var element = document.getElementById("text");
+        element.ownerDocument.defaultView.getComputedStyle(element, null).getPropertyValue("font-family");
+      SCRIPT
+      font_family.should == "Arial"
+    end
+  end
+
+  context "with socket debugger" do
+    let(:socket_debugger_class){ Capybara::Driver::Webkit::SocketDebugger }
+    let(:browser_with_debugger){
+      Capybara::Driver::Webkit::Browser.new(:socket_class => socket_debugger_class)
+    }
+    let(:driver_with_debugger){ Capybara::Driver::Webkit.new(@app, :browser => browser_with_debugger) }
+
+    before(:all) do
+      @app = lambda do |env|
+        body = <<-HTML
+          <html><body>
+            <div id="parent">
+              <div class="find">Expected</div>
+            </div>
+            <div class="find">Unexpected</div>
+          </body></html>
+        HTML
+        [200,
+          { 'Content-Type' => 'text/html', 'Content-Length' => body.length.to_s },
+          [body]]
+      end
+    end
+
+    it "prints out sent content" do
+      socket_debugger_class.any_instance.stub(:received){|content| content }
+      sent_content = ['Find', 1, 17, "//*[@id='parent']"]
+      socket_debugger_class.any_instance.should_receive(:sent).exactly(sent_content.size).times
+      driver_with_debugger.find("//*[@id='parent']")
+    end
+
+    it "prints out received content" do
+      socket_debugger_class.any_instance.stub(:sent)
+      socket_debugger_class.any_instance.should_receive(:received).at_least(:once).and_return("ok")
+      driver_with_debugger.find("//*[@id='parent']")
     end
   end
 end

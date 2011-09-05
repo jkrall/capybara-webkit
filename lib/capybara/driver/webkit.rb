@@ -1,6 +1,7 @@
 require "capybara"
 require "capybara/driver/webkit/node"
 require "capybara/driver/webkit/browser"
+require "capybara/driver/webkit/socket_debugger"
 
 class Capybara::Driver::Webkit
   class WebkitInvalidResponseError < StandardError
@@ -36,7 +37,7 @@ class Capybara::Driver::Webkit
   end
 
   def body
-    source
+    browser.body
   end
 
   def header(key, value)
@@ -44,7 +45,8 @@ class Capybara::Driver::Webkit
   end
 
   def execute_script(script)
-    browser.execute_script script
+    value = browser.execute_script script
+    value.empty? ? nil : value
   end
 
   def evaluate_script(script)
@@ -52,11 +54,11 @@ class Capybara::Driver::Webkit
   end
 
   def response_headers
-    raise Capybara::NotSupportedByDriverError
+    browser.response_headers
   end
 
   def status_code
-    raise Capybara::NotSupportedByDriverError
+    browser.status_code
   end
 
   def within_frame(frame_id_or_index)
@@ -97,7 +99,7 @@ class Capybara::Driver::Webkit
   def server_port
     @rack_server.port
   end
-  
+
   private
 
   def url(path)

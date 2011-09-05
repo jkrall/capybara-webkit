@@ -12,6 +12,9 @@
 #include "FrameFocus.h"
 #include "Header.h"
 #include "Render.h"
+#include "Body.h"
+#include "Status.h"
+#include "Headers.h"
 
 #include <QTcpSocket>
 #include <iostream>

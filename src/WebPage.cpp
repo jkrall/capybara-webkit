@@ -5,6 +5,25 @@
 #include <iostream>
 
 WebPage::WebPage(QObject *parent) : QWebPage(parent) {
+  loadJavascript();
+  setUserStylesheet();
+
+  m_loading = false;
+  this->setCustomNetworkAccessManager();
+
+  connect(this, SIGNAL(loadStarted()), this, SLOT(loadStarted()));
+  connect(this, SIGNAL(loadFinished(bool)), this, SLOT(loadFinished(bool)));
+  connect(this, SIGNAL(frameCreated(QWebFrame *)),
+          this, SLOT(frameCreated(QWebFrame *)));
+}
+
+void WebPage::setCustomNetworkAccessManager() {
+  NetworkAccessManager *manager = new NetworkAccessManager();
+  this->setNetworkAccessManager(manager);
+  connect(manager, SIGNAL(finished(QNetworkReply *)), this, SLOT(replyFinished(QNetworkReply *)));
+}
+
+void WebPage::loadJavascript() {
   QResource javascript(":/capybara.js");
   if (javascript.isCompressed()) {
     QByteArray uncompressedBytes(qUncompress(javascript.data(), javascript.size()));
@@ -15,14 +34,12 @@ WebPage::WebPage(QObject *parent) : QWebPage(parent) {
     javascriptString[javascript.size()] = 0;
     m_capybaraJavascript = javascriptString;
   }
-  m_loading = false;
+}
 
-  this->setNetworkAccessManager(new NetworkAccessManager());
-
-  connect(this, SIGNAL(loadStarted()), this, SLOT(loadStarted()));
-  connect(this, SIGNAL(loadFinished(bool)), this, SLOT(loadFinished(bool)));
-  connect(this, SIGNAL(frameCreated(QWebFrame *)),
-          this, SLOT(frameCreated(QWebFrame *)));
+void WebPage::setUserStylesheet() {
+  QString data = QString("* { font-family: 'Arial' ! important; }").toUtf8().toBase64();
+  QUrl url = QUrl(QString("data:text/css;charset=utf-8;base64,") + data);
+  settings()->setUserStyleSheetUrl(url);
 }
 
 QString WebPage::userAgentForUrl(const QUrl &url ) const {
@@ -131,4 +148,52 @@ bool WebPage::render(const QString &fileName) {
   this->setViewportSize(viewportSize);
 
   return buffer.save(fileName);
+}
+
+QString WebPage::chooseFile(QWebFrame *parentFrame, const QString &suggestedFile) {
+  Q_UNUSED(parentFrame);
+  Q_UNUSED(suggestedFile);
+
+  return getLastAttachedFileName();
+}
+
+bool WebPage::extension(Extension extension, const ExtensionOption *option, ExtensionReturn *output) {
+  if (extension == ChooseMultipleFilesExtension) {
+    QStringList names = QStringList() << getLastAttachedFileName();
+    static_cast<ChooseMultipleFilesExtensionReturn*>(output)->fileNames = names;
+    return true;
+  }
+  return false;
+}
+
+QString WebPage::getLastAttachedFileName() {
+  return currentFrame()->evaluateJavaScript(QString("Capybara.lastAttachedFile")).toString();
+}
+
+void WebPage::replyFinished(QNetworkReply *reply) {
+  if (reply->url() == this->currentFrame()->url()) {
+    QStringList headers;
+    m_lastStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    QList<QByteArray> list = reply->rawHeaderList();
+
+    int length = list.size();
+    for(int i = 0; i < length; i++) {
+      headers << list.at(i)+": "+reply->rawHeader(list.at(i));
+    }
+
+    m_pageHeaders = headers.join("\n");
+  }
+}
+
+int WebPage::getLastStatus() {
+  return m_lastStatus;
+}
+
+void WebPage::resetResponseHeaders() {
+  m_lastStatus = 0;
+  m_pageHeaders = QString();
+}
+
+QString WebPage::pageHeaders() {
+  return m_pageHeaders;
 }
