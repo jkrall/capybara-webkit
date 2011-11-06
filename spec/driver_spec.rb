@@ -20,7 +20,7 @@ describe Capybara::Driver::Webkit do
           p_id = "greeting"
           msg  = "hello"
           iframe = "<iframe id=\"f\" src=\"/?iframe=true\"></iframe>"
-        end 
+        end
         body = <<-HTML
           <html>
             <head>
@@ -104,6 +104,54 @@ describe Capybara::Driver::Webkit do
     end
   end
 
+  context "redirect app" do
+    before(:all) do
+      @app = lambda do |env|
+        if env['PATH_INFO'] == '/target'
+          content_type = "<p>#{env['CONTENT_TYPE']}</p>"
+          [200, {"Content-Type" => "text/html", "Content-Length" => content_type.length.to_s}, [content_type]]
+        elsif env['PATH_INFO'] == '/form'
+          body = <<-HTML
+            <html>
+              <body>
+                <form action="/redirect" method="POST" enctype="multipart/form-data">
+                  <input name="submit" type="submit" />
+                </form>
+              </body>
+            </html>
+          HTML
+          [200, {"Content-Type" => "text/html", "Content-Length" => body.length.to_s}, [body]]
+        else
+          [301, {"Location" => "/target"}, [""]]
+        end
+      end
+    end
+
+    it "should redirect without content type" do
+      subject.visit("/form")
+      subject.find("//input").first.click
+      subject.find("//p").first.text.should == ""
+    end
+  end
+
+  context "css app" do
+    before(:all) do
+      body = "css"
+      @app = lambda do |env|
+        [200, {"Content-Type" => "text/css", "Content-Length" => body.length.to_s}, [body]]
+      end
+      subject.visit("/")
+    end
+
+    it "renders unsupported content types gracefully" do
+      subject.body.should =~ /css/
+    end
+
+    it "sets the response headers with respect to the unsupported request" do
+      subject.response_headers["Content-Type"].should == "text/css"
+    end
+  end
+
   context "hello app" do
     before(:all) do
       @app = lambda do |env|
@@ -115,6 +163,7 @@ describe Capybara::Driver::Webkit do
               </style>
             </head>
             <body>
+              <div class='normalize'>Spaces&nbsp;not&nbsp;normalized&nbsp;</div>
               <div id="display_none">
                 <div id="invisible">Can't see me</div>
               </div>
@@ -130,6 +179,13 @@ describe Capybara::Driver::Webkit do
           { 'Content-Type' => 'text/html', 'Content-Length' => body.length.to_s },
           [body]]
       end
+    end
+
+    it "handles anchor tags" do
+      subject.visit("#test")
+      subject.find("//*[contains(., 'hello')]").should_not be_empty
+      subject.visit("#test")
+      subject.find("//*[contains(., 'hello')]").should_not be_empty
     end
 
     it "finds content after loading a URL" do
@@ -156,6 +212,10 @@ describe Capybara::Driver::Webkit do
 
     it "returns a node's text" do
       subject.find("//p").first.text.should == "hello"
+    end
+
+    it "normalizes a node's text" do
+      subject.find("//div[contains(@class, 'normalize')]").first.text.should == "Spaces not normalized"
     end
 
     it "returns the current URL" do
@@ -788,7 +848,7 @@ describe Capybara::Driver::Webkit do
           [body]]
       end
     end
-    
+
     it "raises a webkit error for the requested url" do
       make_the_server_go_away
       expect {
@@ -803,7 +863,7 @@ describe Capybara::Driver::Webkit do
       subject.browser.instance_variable_get(:@socket).unstub!(:puts)
       subject.browser.instance_variable_get(:@socket).unstub!(:print)
     end
- 
+
     def make_the_server_go_away
       subject.browser.instance_variable_get(:@socket).stub!(:gets).and_return(nil)
       subject.browser.instance_variable_get(:@socket).stub!(:puts)
@@ -841,6 +901,64 @@ describe Capybara::Driver::Webkit do
     end
   end
 
+  context "cookie-based app" do
+    before(:all) do
+      @cookie = 'cookie=abc; domain=127.0.0.1; path=/'
+      @app = lambda do |env|
+        request = ::Rack::Request.new(env)
+
+        body = <<-HTML
+          <html><body>
+            <p id="cookie">#{request.cookies["cookie"] || ""}</p>
+          </body></html>
+        HTML
+        [200,
+          { 'Content-Type'   => 'text/html; charset=UTF-8',
+            'Content-Length' => body.length.to_s,
+            'Set-Cookie'     => @cookie,
+          },
+          [body]]
+      end
+    end
+
+    def echoed_cookie
+      subject.find('id("cookie")').first.text
+    end
+
+    it "remembers the cookie on second visit" do
+      echoed_cookie.should == ""
+      subject.visit "/"
+      echoed_cookie.should == "abc"
+    end
+
+    it "uses a custom cookie" do
+      subject.browser.set_cookie @cookie
+      subject.visit "/"
+      echoed_cookie.should == "abc"
+    end
+
+    it "clears cookies" do
+      subject.browser.clear_cookies
+      subject.visit "/"
+      echoed_cookie.should == ""
+    end
+
+    it "allows enumeration of cookies" do
+      cookies = subject.browser.get_cookies
+
+      cookies.size.should == 1
+
+      cookie = Hash[cookies[0].split(/\s*;\s*/).map { |x| x.split("=", 2) }]
+      cookie["cookie"].should == "abc"
+      cookie["domain"].should include "127.0.0.1"
+      cookie["path"].should == "/"
+    end
+
+    it "allows reading access to cookies using a nice syntax" do
+      subject.cookies["cookie"].should == "abc"
+    end
+  end
+
   context "with socket debugger" do
     let(:socket_debugger_class){ Capybara::Driver::Webkit::SocketDebugger }
     let(:browser_with_debugger){
@@ -875,6 +993,92 @@ describe Capybara::Driver::Webkit do
       socket_debugger_class.any_instance.stub(:sent)
       socket_debugger_class.any_instance.should_receive(:received).at_least(:once).and_return("ok")
       driver_with_debugger.find("//*[@id='parent']")
+    end
+  end
+
+  context "remove node app" do
+    before(:all) do
+      @app = lambda do |env|
+        body = <<-HTML
+          <html>
+            <div id="parent">
+              <p id="removeMe">Hello</p>
+            </div>
+          </html>
+        HTML
+        [200,
+          { 'Content-Type' => 'text/html', 'Content-Length' => body.length.to_s },
+          [body]]
+      end
+    end
+
+    before { set_automatic_reload false }
+    after { set_automatic_reload true }
+
+    def set_automatic_reload(value)
+      if Capybara.respond_to?(:automatic_reload)
+        Capybara.automatic_reload = value
+      end
+    end
+
+    it "allows removed nodes when reloading is disabled" do
+      node = subject.find("//p[@id='removeMe']").first
+      subject.evaluate_script("document.getElementById('parent').innerHTML = 'Magic'")
+      node.text.should == 'Hello'
+    end
+  end
+
+  context "css overflow app" do
+    before(:all) do
+      @app = lambda do |env|
+        body = <<-HTML
+          <html>
+            <head>
+              <style type="text/css">
+                #overflow { overflow: hidden }
+              </style>
+            </head>
+            <body>
+              <div id="overflow">Overflow</div>
+            </body>
+          </html>
+        HTML
+        [200,
+          { 'Content-Type' => 'text/html', 'Content-Length' => body.length.to_s },
+          [body]]
+      end
+    end
+
+    it "handles overflow hidden" do
+      subject.find("//div[@id='overflow']").first.text.should == "Overflow"
+    end
+  end
+
+  context "javascript redirect app" do
+    before(:all) do
+      @app = lambda do |env|
+        if env['PATH_INFO'] == '/redirect'
+          body = <<-HTML
+            <html>
+              <script type="text/javascript">
+                window.location = "/next";
+              </script>
+            </html>
+          HTML
+        else
+          body = "<html><p>finished</p></html>"
+        end
+        [200,
+          { 'Content-Type' => 'text/html', 'Content-Length' => body.length.to_s },
+          [body]]
+      end
+    end
+
+    it "loads a page without error" do
+      10.times do
+        subject.visit("/redirect")
+        subject.find("//p").first.text.should == "finished"
+      end
     end
   end
 end

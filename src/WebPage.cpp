@@ -1,10 +1,13 @@
 #include "WebPage.h"
 #include "JavascriptInvocation.h"
 #include "NetworkAccessManager.h"
+#include "NetworkCookieJar.h"
+#include "UnsupportedContentHandler.h"
 #include <QResource>
 #include <iostream>
 
 WebPage::WebPage(QObject *parent) : QWebPage(parent) {
+  setForwardUnsupportedContent(true);
   loadJavascript();
   setUserStylesheet();
 
@@ -15,12 +18,17 @@ WebPage::WebPage(QObject *parent) : QWebPage(parent) {
   connect(this, SIGNAL(loadFinished(bool)), this, SLOT(loadFinished(bool)));
   connect(this, SIGNAL(frameCreated(QWebFrame *)),
           this, SLOT(frameCreated(QWebFrame *)));
+  connect(this, SIGNAL(unsupportedContent(QNetworkReply*)),
+      this, SLOT(handleUnsupportedContent(QNetworkReply*)));
+  this->setViewportSize(QSize(1680, 1050));
 }
 
 void WebPage::setCustomNetworkAccessManager() {
   NetworkAccessManager *manager = new NetworkAccessManager();
+  manager->setCookieJar(new NetworkCookieJar());
   this->setNetworkAccessManager(manager);
   connect(manager, SIGNAL(finished(QNetworkReply *)), this, SLOT(replyFinished(QNetworkReply *)));
+  connect(manager, SIGNAL(sslErrors(QNetworkReply *, QList<QSslError>)), this, SLOT(ignoreSslErrors(QNetworkReply *, QList<QSslError>)));
 }
 
 void WebPage::loadJavascript() {
@@ -111,8 +119,8 @@ void WebPage::loadStarted() {
 }
 
 void WebPage::loadFinished(bool success) {
-  Q_UNUSED(success);
   m_loading = false;
+  emit pageFinished(success);
 }
 
 bool WebPage::isLoading() const {
@@ -158,6 +166,7 @@ QString WebPage::chooseFile(QWebFrame *parentFrame, const QString &suggestedFile
 }
 
 bool WebPage::extension(Extension extension, const ExtensionOption *option, ExtensionReturn *output) {
+  Q_UNUSED(option);
   if (extension == ChooseMultipleFilesExtension) {
     QStringList names = QStringList() << getLastAttachedFileName();
     static_cast<ChooseMultipleFilesExtensionReturn*>(output)->fileNames = names;
@@ -185,6 +194,20 @@ void WebPage::replyFinished(QNetworkReply *reply) {
   }
 }
 
+void WebPage::ignoreSslErrors(QNetworkReply *reply, const QList<QSslError> &errors) {
+  if (m_ignoreSslErrors)
+    reply->ignoreSslErrors(errors);
+}
+
+void WebPage::setIgnoreSslErrors(bool ignore) {
+  m_ignoreSslErrors = ignore;
+}
+
+bool WebPage::ignoreSslErrors() {
+  return m_ignoreSslErrors;
+}
+
+
 int WebPage::getLastStatus() {
   return m_lastStatus;
 }
@@ -196,4 +219,9 @@ void WebPage::resetResponseHeaders() {
 
 QString WebPage::pageHeaders() {
   return m_pageHeaders;
+}
+
+void WebPage::handleUnsupportedContent(QNetworkReply *reply) {
+  UnsupportedContentHandler *handler = new UnsupportedContentHandler(this, reply);
+  Q_UNUSED(handler);
 }

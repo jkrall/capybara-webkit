@@ -2,12 +2,16 @@ require "capybara"
 require "capybara/driver/webkit/node"
 require "capybara/driver/webkit/browser"
 require "capybara/driver/webkit/socket_debugger"
+require "capybara/driver/webkit/cookie_jar"
 
 class Capybara::Driver::Webkit
   class WebkitInvalidResponseError < StandardError
   end
 
   class WebkitNoResponseError < StandardError
+  end
+
+  class NodeNotAttachedError < Capybara::ElementNotFound
   end
 
   attr_reader :browser
@@ -17,7 +21,8 @@ class Capybara::Driver::Webkit
     @options = options
     @rack_server = Capybara::Server.new(@app)
     @rack_server.boot if Capybara.run_server
-    @browser = options[:browser] || Browser.new
+    @browser = options[:browser] || Browser.new(
+      :ignore_ssl_errors => options[:ignore_ssl_errors])
   end
 
   def current_url
@@ -98,6 +103,10 @@ class Capybara::Driver::Webkit
 
   def server_port
     @rack_server.port
+  end
+
+  def cookies
+    @cookie_jar ||= CookieJar.new(browser)
   end
 
   private

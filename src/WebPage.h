@@ -15,6 +15,8 @@ class WebPage : public QWebPage {
     void setCustomNetworkAccessManager();
     bool render(const QString &fileName);
     virtual bool extension (Extension extension, const ExtensionOption *option=0, ExtensionReturn *output=0);
+    void setIgnoreSslErrors(bool ignore);
+    bool ignoreSslErrors();
 
   public slots:
     bool shouldInterruptJavaScript();
@@ -25,6 +27,11 @@ class WebPage : public QWebPage {
     QString pageHeaders();
     void frameCreated(QWebFrame *);
     void replyFinished(QNetworkReply *reply);
+    void ignoreSslErrors(QNetworkReply *reply, const QList<QSslError> &);
+    void handleUnsupportedContent(QNetworkReply *reply);
+
+  signals:
+    void pageFinished(bool);
 
   protected:
     virtual void javaScriptConsoleMessage(const QString &message, int lineNumber, const QString &sourceID);
@@ -42,5 +49,6 @@ class WebPage : public QWebPage {
     void setUserStylesheet();
     int m_lastStatus;
     QString m_pageHeaders;
+    bool m_ignoreSslErrors;
 };
 
